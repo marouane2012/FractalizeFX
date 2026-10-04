@@ -123,7 +123,13 @@ def set_itercnt(v):
     itercnt = iv
 def set_rendering(v):
     global rendering
-    rendering = bool(int(v))
+    s = str(v).strip().lower()
+    if s in ('1','true','yes','on'):
+        rendering = True
+    elif s in ('0','false','no','off',''):
+        rendering = False
+    else:
+        raise ValueError
 def set_bailout(v):
     global bailout
     if float(v) < 0: raise ValueError('must be positive')
@@ -132,6 +138,7 @@ def set_typ(v):
     global typ
     tv = int(v)
     if tv not in (0,1,2,3,4): raise ValueError('fractal type out of range')
+    typ = tv
 def set_param1(v):
     global param1
     param1 = float(v)
@@ -148,7 +155,7 @@ def set_size(v):
     global size
     sv = int(v)
     if sv <= 0: raise ValueError('must be positive')
-    if sv > 1600: print('It is reccomended to first enable "Disable rendering" on page 3.')
+    if sv > 1600: print('It is reccomended to first disable "Show image?" on page 3.')
     size = sv
 def set_xp(v):
     global xp
@@ -395,10 +402,10 @@ while True:
     for f in pages[current_page]:
         f.sync()
     imask = (itercom == itercnt-1)
-    pallete = np.array(collist,dtype = np.uint8)
-    map = itercom % (pallete.shape[0]-1)
-    map[imask] = pallete.shape[0]-1
-    img = pallete[map]
+    pallete_arr = np.array(collist,dtype = np.uint8)
+    map = itercom % (pallete_arr.shape[0]-1)
+    map[imask] = pallete_arr.shape[0]-1
+    img = pallete_arr[map]
     sf = pygame.surfarray.make_surface(img.swapaxes(0,1))
     if saveImage:
         saveImage = False
