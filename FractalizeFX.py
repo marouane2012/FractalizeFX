@@ -47,14 +47,17 @@ inside = (0,0,0)
 r = 1
 g = 1
 b = 0
-pallete = None
-#pallete = [(0,0,0),(255,255,255)] #Example pallete
+palette_stops = None
 st = time.time()
 def build_palette():
     global collist,palleteLength
-    if pallete is not None:
-        collist = list(pallete) + [inside]
-        palleteLength = len(pallete)
+    if palette_stops is not None:
+        collist = []
+        n = max(2,palleteLength)
+        for i in range(n):
+            t = i / (n-1)
+            collist.append(sample_palette(palette_stops,t))
+        collist.append(inside)
         return
     collist = []
     for col in range(palleteLength):
@@ -112,7 +115,27 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
         z = np.zeros_like(c,dtype=np.complex128)
         for i in range(itercnt):
             mask = np.abs(z) <= bailout
-            z[mask] = z[mask] ** 2 + c[mask]
+            zr = np.abs(z.real)
+            zi = np.abs(z.imag)
+            z_folded = zr + 1j*zi
+            z[mask] = z_folded[mask] ** param1 + c[mask] #generalized
+            iters[mask] = i
+        return iters
+    if typ == 5: #Julia
+        c = param1 + 1j*param2
+        z = grid
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            z[mask] = z[mask] ** param3 + c #generalized
+            iters[mask] = i
+        return iters
+    if typ == 6: #Mandelbar
+        c = grid
+        z = np.zeros_like(c,dtype=np.complex128)
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            z_conj = z.real - (1j*z.imag)
+            z[mask] = z_conj[mask] ** param1 + c[mask]
             iters[mask] = i
         return iters
 #Setters
@@ -137,7 +160,7 @@ def set_bailout(v):
 def set_typ(v):
     global typ
     tv = int(v)
-    if tv not in (0,1,2,3,4): raise ValueError('fractal type out of range')
+    if tv not in (0,1,2,3,4,5,6): raise ValueError('fractal type out of range')
     typ = tv
 def set_param1(v):
     global param1
@@ -178,6 +201,61 @@ def set_palleteLength(v):
     pv = int(v)
     if pv < 1: raise ValueError('must be positive')
     palleteLength = pv
+def set_palette_stops(v):
+    global palette_stops
+    s = v.strip()
+    if not s or s.lower() == 'none':
+        palette_stops = None
+        return
+    try:
+        raw = eval(s, {'__builtins__': {}}, {})
+    except Exception:
+        raise ValueError('invalid syntax')
+    if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+        raise ValueError('need at least 2 stops')
+    parsed = []
+    for item in raw:
+        if not (isinstance(item, (list, tuple)) and len(item) == 2):
+            raise ValueError('each stop must be [color, pos]')
+        color, pos = item
+        if not (isinstance(color, (list, tuple)) and len(color) == 3):
+            raise ValueError('color must be (r,g,b)')
+        try:
+            r, g, b = int(color[0]), int(color[1]), int(color[2])
+        except Exception:
+            raise ValueError('color channels must be integers')
+        if not all(0 <= c <= 255 for c in (r, g, b)):
+            raise ValueError('channel out of 0-255')
+        try:
+            pos = float(pos)
+        except Exception:
+            raise ValueError('position must be a number')
+        if not (0.0 <= pos <= 1.0):
+            raise ValueError('position must be 0-1')
+        parsed.append((pos, (r, g, b)))
+    parsed.sort(key=lambda x: x[0])
+    palette_stops = parsed
+def get_palette_stops_str():
+    if palette_stops is None:
+        return 'None'
+    parts = [f'[({r},{g},{b}),{pos:g}]' for pos, (r, g, b) in palette_stops]
+    return '[' + ','.join(parts) + ']'
+def sample_palette(stops, t):
+    if t <= stops[0][0]:
+        return stops[0][1]
+    if t >= stops[-1][0]:
+        return stops[-1][1]
+    for i in range(len(stops) - 1):
+        p0, c0 = stops[i]
+        p1, c1 = stops[i+1]
+        if p0 <= t <= p1:
+            if p1 == p0:
+                return c1
+            f = (t - p0) / (p1 - p0)
+            return (int(round(c0[0] + (c1[0] - c0[0]) * f)),
+                    int(round(c0[1] + (c1[1] - c0[1]) * f)),
+                    int(round(c0[2] + (c1[2] - c0[2]) * f)))
+    return stops[-1][1]
 #Input fields
 class InputField:
     def __init__(self,label,x,y,w,h,getter,setter):
@@ -238,9 +316,11 @@ page2_fields = [
     InputField('Palette length',    FIELD_X, 560, FIELD_W, FIELD_H, lambda: palleteLength, set_palleteLength),
 ]
 page3_fields = [
-    InputField('Type (0 to 4)',     FIELD_X, 160, FIELD_W, FIELD_H, lambda: typ,     set_typ),
+    InputField('Type (0 to 6)',     FIELD_X, 160, FIELD_W, FIELD_H, lambda: typ,     set_typ),
     InputField('Resolution',        FIELD_X, 240, FIELD_W, FIELD_H, lambda: size,    set_size),
     InputField('Show image?',       FIELD_X, 320, FIELD_W, FIELD_H, lambda: rendering, set_rendering),
+    InputField('Palette stops', FIELD_X, 400, FIELD_W, FIELD_H,
+           get_palette_stops_str, set_palette_stops),
 ]
 pages = [page1_fields,page2_fields,page3_fields]
 page_names = ['Parameters','Location','Rendering']
@@ -396,9 +476,6 @@ while True:
                 sy = (ye-yp) * shift
                 yp += sy/2
                 ye += sy/2
-    if outdated:
-        warningOutdated = font.render('Image is outdated. R or apply to re-render.',False,red)
-        window.blit((warningOutdated),(920,690))
     for f in pages[current_page]:
         f.sync()
     imask = (itercom == itercnt-1)
@@ -414,6 +491,11 @@ while True:
         window.blit(sf,(0,0))
     pygame.draw.rect(window, (15, 15, 22), pygame.Rect(PANEL_X, 0, width - PANEL_X, height))
     pygame.draw.line(window, (70, 70, 90), (PANEL_X, 0), (PANEL_X, height), 2)
+    if outdated:
+        warningOutdated = font.render('Image is outdated. R or apply to re-render.',False,red)
+        window.blit((warningOutdated),(920,690))
+    notice = font.render('Most fractals have parameters you will have to adjust.',False,red)
+    window.blit((notice),(920,720))
     for i, tr in enumerate(tab_rects):
         active = (i == current_page)
         pygame.draw.rect(window, (55, 75, 120) if active else (30, 30, 42), tr)
