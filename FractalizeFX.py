@@ -3,6 +3,7 @@ import sys
 import math
 import time
 import numpy as np
+#v0.9
 pygame.init()
 pygame.key.start_text_input()
 width,height = 1600,900
@@ -23,7 +24,8 @@ param1 = 0.0
 param2 = 0.0
 param3 = 0.0
 param4 = 0.0
-size = 900
+size_w = 900
+size_h = 900
 xp = -2.1
 yp = -1.75
 xe = 1.4
@@ -32,8 +34,12 @@ rendering = True
 image_path = 'location.png'
 palleteLength = 16
 #palleteLength = itercnt
+smooth = False
 outdated = False
 saveImage = False
+progressive = False
+progressive_tiers = [16, 8, 4, 2, 1]
+progressive_idx = -1   # -1 = idle / done
 font = pygame.font.Font(None,24)
 label_font = pygame.font.Font(None,22)
 field_font = pygame.font.Font(None,28)
@@ -49,6 +55,39 @@ g = 1
 b = 0
 palette_stops = None
 st = time.time()
+mult = 1
+sf = None
+itercom = None
+z_final = None
+
+def render_full():
+    global itercom, z_final, sf, progressive_idx
+    itercom, z_final = fractal(size_w, size_h, itercnt, xp, yp, xe, ye,
+                                param1, param2, param3, param4, bailout, typ)
+    sf = colorize(itercom, z_final)
+    progressive_idx = -1
+
+def render_tier(idx):
+    global itercom, z_final, sf
+    k = progressive_tiers[idx]
+    sw = max(1, size_w // k)
+    sh = max(1, size_h // k)
+    it, zf = fractal(sw, sh, itercnt, xp, yp, xe, ye,
+                     param1, param2, param3, param4, bailout, typ)
+    surface = colorize(it, zf)
+    if sw != size_w or sh != size_h:
+        surface = pygame.transform.scale(surface, (size_w, size_h))
+    sf = surface
+    itercom = it
+    z_final = zf
+
+def start_render():
+    global progressive_idx
+    if progressive:
+        progressive_idx = 0
+        render_tier(0)   # synchronous so user sees something immediately
+    else:
+        render_full()
 def build_palette():
     global collist,palleteLength
     if palette_stops is not None:
@@ -69,10 +108,10 @@ def build_palette():
     collist.append(inside)
 build_palette()
 #Fractal rendering
-def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
-    iters = np.zeros((size,size),dtype=np.int32)
-    re = np.linspace(xp,xe,size)
-    im = np.linspace(yp,ye,size)
+def fractal(size_w,size_h,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
+    iters = np.zeros((size_w,size_h),dtype=np.int32)
+    re = np.linspace(xp,xe,size_w)
+    im = np.linspace(yp,ye,size_h)
     x,y = np.meshgrid(re,im,indexing='ij')
     grid = x + 1j * y
     if typ == 0: #Mandelbrot
@@ -82,7 +121,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             mask = np.abs(z) <= bailout
             z[mask] = z[mask] ** 2 + c[mask] #NumPy ** square
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 1: #Mandelbrot (generalized)
         c = grid
         z = np.zeros_like(c,dtype=np.complex128)
@@ -90,7 +129,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             mask = np.abs(z) <= bailout
             z[mask] = z[mask] ** param1 + c[mask]
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 2: #Mandelbrot with mutation
         c = grid
         z = np.zeros_like(c,dtype=np.complex128)
@@ -98,7 +137,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             mask = np.abs(z) <= bailout
             z[mask] = (z[mask] ** 2 + c[mask]) + c[mask]**param1
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 3: #Power sequence
         c = grid
         z = np.zeros_like(c,dtype=np.complex128)
@@ -109,7 +148,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             z[mask] = z[mask] ** param3 + c[mask]
             z[mask] = z[mask] ** param4 + c[mask]
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 4: #Burning ship
         c = grid
         z = np.zeros_like(c,dtype=np.complex128)
@@ -120,7 +159,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             z_folded = zr + 1j*zi
             z[mask] = z_folded[mask] ** param1 + c[mask] #generalized
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 5: #Julia
         c = param1 + 1j*param2
         z = grid
@@ -128,7 +167,7 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             mask = np.abs(z) <= bailout
             z[mask] = z[mask] ** param3 + c #generalized
             iters[mask] = i
-        return iters
+        return iters,z
     if typ == 6: #Mandelbar
         c = grid
         z = np.zeros_like(c,dtype=np.complex128)
@@ -137,7 +176,53 @@ def fractal(size,itercnt,xp,yp,xe,ye,param1,param2,param3,param4,bailout,typ):
             z_conj = z.real - (1j*z.imag)
             z[mask] = z_conj[mask] ** param1 + c[mask]
             iters[mask] = i
-        return iters
+        return iters,z
+    if typ == 7: #Mandelbrot complex power
+        c = grid
+        z = np.zeros_like(c,dtype=np.complex128)
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            z[mask] = z[mask] ** (param1 + 1j * param2) + c[mask] ** (param3 + 1j * param4)
+            iters[mask] = i
+        return iters,z
+    if typ == 8: #Perpendicular mandelbrot
+        c = grid
+        z = np.zeros_like(c,dtype=np.complex128)
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            zr = np.abs(z.real)
+            z_conj = zr - (1j*z.imag)
+            z[mask] = z_conj[mask] ** param1 + c[mask]
+            iters[mask] = i
+        return iters,z
+    if typ == 9: #Parameterized power
+        c = param1 + 1j*param2
+        p = grid
+        z = np.zeros_like(p,dtype=np.complex128)
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            z[mask] = z[mask] ** p[mask] + c
+            iters[mask] = i
+        return iters,z
+    if typ == 10: #Tetration
+        c = grid
+        z = np.zeros_like(c,dtype=np.complex128)
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            z[mask] = z[mask] ** z[mask] + c[mask] #NumPy ** square
+            iters[mask] = i
+        return iters,z
+    if typ == 11: #Burning ship julia
+        c = param1 + 1j*param2
+        z = grid
+        for i in range(itercnt):
+            mask = np.abs(z) <= bailout
+            zr = np.abs(z.real)
+            zi = np.abs(z.imag)
+            z_folded = zr + 1j*zi
+            z[mask] = z_folded[mask] ** param3 + c #generalized
+            iters[mask] = i
+        return iters,z
 #Setters
 def set_itercnt(v):
     global itercnt
@@ -160,7 +245,7 @@ def set_bailout(v):
 def set_typ(v):
     global typ
     tv = int(v)
-    if tv not in (0,1,2,3,4,5,6): raise ValueError('fractal type out of range')
+    if tv not in (0,1,2,3,4,5,6,7,8,9,10,11): raise ValueError('fractal type out of range')
     typ = tv
 def set_param1(v):
     global param1
@@ -174,12 +259,22 @@ def set_param3(v):
 def set_param4(v):
     global param4
     param4 = float(v)
-def set_size(v):
-    global size
+def set_mult(v):
+    global mult
+    if float(v) >= 2 or float(v) < 0: raise ValueError('cant exceed 2')
+    mult = float(v)
+def set_size_w(v):
+    global size_w
     sv = int(v)
     if sv <= 0: raise ValueError('must be positive')
     if sv > 1600: print('It is reccomended to first disable "Show image?" on page 3.')
-    size = sv
+    size_w = sv
+def set_size_h(v):
+    global size_h
+    sv = int(v)
+    if sv <= 0: raise ValueError('must be positive')
+    if sv > 1600: print('It is reccomended to first disable "Show image?" on page 3.')
+    size_h = sv
 def set_xp(v):
     global xp
     xp = float(v)
@@ -201,6 +296,24 @@ def set_palleteLength(v):
     pv = int(v)
     if pv < 1: raise ValueError('must be positive')
     palleteLength = pv
+def set_progressive(v):
+    global progressive
+    s = str(v).strip().lower()
+    if s in ('1','true','yes','on'):
+        progressive = True
+    elif s in ('0','false','no','off',''):
+        progressive = False
+    else:
+        raise ValueError
+def set_smooth(v):
+    global smooth
+    s = str(v).strip().lower()
+    if s in ('1','true','yes','on'):
+        smooth = True
+    elif s in ('0','false','no','off',''):
+        smooth = False
+    else:
+        raise ValueError
 def set_palette_stops(v):
     global palette_stops
     s = v.strip()
@@ -256,6 +369,60 @@ def sample_palette(stops, t):
                     int(round(c0[1] + (c1[1] - c0[1]) * f)),
                     int(round(c0[2] + (c1[2] - c0[2]) * f)))
     return stops[-1][1]
+def get_aspect_ratio():
+    return (xe - xp) / (ye - yp)
+def get_aspect_ratio_str():
+    r = get_aspect_ratio()
+    if abs(r - round(r)) < 1e-6:
+        return str(int(round(r)))
+    return f'{r:.4f}'
+def set_aspect_ratio(v):
+    global xp, xe
+    n = float(v)
+    if n <= 0:
+        raise ValueError('must be positive')
+    y_span = ye - yp
+    new_x_span = n * y_span
+    cx = (xp + xe) / 2
+    xp = cx - new_x_span / 2
+    xe = cx + new_x_span / 2
+def _power_for_smooth():
+    if typ in (0, 2):    return 2.0
+    if typ in (1, 4, 6, 8, 11): return param1 if param1 > 1e-6 else 2.0
+    if typ == 3:
+        p = param1 * param2 * param3 * param4
+        return p if p > 1e-6 else 2.0
+    if typ == 5:         return param3 if param3 > 1e-6 else 2.0
+    return 2.0 #7,9 are a nightmare
+
+def colorize(iters, zfin):
+    pal_arr = np.array(collist, dtype=np.uint8)
+    pal_len = pal_arr.shape[0] - 1
+    imask = (iters == itercnt - 1)
+
+    if smooth:
+        power = _power_for_smooth()
+        log_bail = math.log(bailout) if bailout > 1.0 else math.log(2.0)
+        log_pow  = math.log(power)   if power   > 1.0 else math.log(2.0)
+        absz = np.abs(zfin)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inner = np.log(np.where(absz > 0, absz, 1.0)) / log_bail
+            inner = np.where(inner > 1e-9, inner, 1e-9)
+            mu = iters.astype(np.float64) + 1.0 - np.log(inner) / log_pow
+        mu = np.where(np.isfinite(mu), mu, 0.0)
+        pos = mu
+    else:
+        pos = iters.astype(np.float64)
+
+    p = pos % pal_len
+    i0 = np.floor(p).astype(np.int32)
+    i1 = (i0 + 1) % pal_len
+    frac = (p - i0)[..., None].astype(np.float32)
+    c0 = pal_arr[i0].astype(np.float32)
+    c1 = pal_arr[i1].astype(np.float32)
+    img = (c0 * (1.0 - frac) + c1 * frac).astype(np.uint8)
+    img[imask] = inside
+    return pygame.surfarray.make_surface(img)
 #Input fields
 class InputField:
     def __init__(self,label,x,y,w,h,getter,setter):
@@ -316,30 +483,37 @@ page2_fields = [
     InputField('Palette length',    FIELD_X, 560, FIELD_W, FIELD_H, lambda: palleteLength, set_palleteLength),
 ]
 page3_fields = [
-    InputField('Type (0 to 6)',     FIELD_X, 160, FIELD_W, FIELD_H, lambda: typ,     set_typ),
-    InputField('Resolution',        FIELD_X, 240, FIELD_W, FIELD_H, lambda: size,    set_size),
-    InputField('Show image?',       FIELD_X, 320, FIELD_W, FIELD_H, lambda: rendering, set_rendering),
-    InputField('Palette stops', FIELD_X, 400, FIELD_W, FIELD_H,
+    InputField('Type (0 to 6)',     FIELD_X, 160, FIELD_W, FIELD_H, lambda: typ,       set_typ),
+    InputField('Width',             FIELD_X, 240, FIELD_W, FIELD_H, lambda: size_w,    set_size_w),
+    InputField('Height',            FIELD_X, 320, FIELD_W, FIELD_H, lambda: size_h,    set_size_h),
+    InputField('Show image?',       FIELD_X, 400, FIELD_W, FIELD_H, lambda: rendering, set_rendering),
+    InputField('Palette stops',     FIELD_X, 480, FIELD_W, FIELD_H,
            get_palette_stops_str, set_palette_stops),
+    InputField('Aspect ratio', FIELD_X, 560, FIELD_W, FIELD_H,
+           get_aspect_ratio_str, set_aspect_ratio),
 ]
-pages = [page1_fields,page2_fields,page3_fields]
-page_names = ['Parameters','Location','Rendering']
+page4_fields = [
+    InputField('Smooth?',              FIELD_X, 160, FIELD_W, FIELD_H, lambda: smooth,      set_smooth),
+    InputField('Movement multiplier',  FIELD_X, 240, FIELD_W, FIELD_H, lambda: mult,        set_mult),
+    InputField('Progressive?',         FIELD_X, 320, FIELD_W, FIELD_H, lambda: progressive, set_progressive),
+]
+pages = [page1_fields,page2_fields,page3_fields,page4_fields]
+page_names = ['Parameters','Location','Rendering','Control']
 current_page = 0
 focused_field = None
-tab_rects = [pygame.Rect(920, 70, 200, 40),
-             pygame.Rect(1140, 70, 200, 40),
-             pygame.Rect(1360,70,200,40)]
+tab_rects = [pygame.Rect(920, 70, 150, 40),
+             pygame.Rect(1090, 70, 150, 40),
+             pygame.Rect(1260,70,150,40),
+             pygame.Rect(1430,70,150,40)]
 apply_rect = pygame.Rect(920, 630, 660, 40)
 def apply():
     global itercom,outdated
     for f in pages[current_page]:
         f.commit()
     build_palette()
-    itercom = fractal(size, itercnt, xp, yp, xe, ye,
-                      param1, param2, param3, param4, bailout, typ)
+    start_render()
     outdated = False
-itercom = fractal(size, itercnt, xp, yp, xe, ye,
-                  param1, param2, param3, param4, bailout, typ)
+start_render()
 clock = pygame.time.Clock()
 #Main loop
 while True:
@@ -436,59 +610,61 @@ while True:
             shift = 0.5 if (event.mod & pygame.KMOD_SHIFT) else 1.0
             if event.key == pygame.K_r:
                 outdated = False
-                itercom = fractal(size, itercnt, xp, yp, xe, ye,
-                                  param1, param2, param3, param4, bailout, typ)
+                start_render()
                 if shift == 0.5:
                     saveImage = True
             elif event.key == pygame.K_EQUALS:
                 outdated = True
-                sx = (xe-xp) * shift
-                sy = (ye-yp) * shift
+                progressive_idx = -1
+                sx = (xe-xp) * shift * mult
+                sy = (ye-yp) * shift * mult
                 xp += sx/4
                 xe -= sx/4
                 yp += sy/4
                 ye -= sy/4
             elif event.key == pygame.K_MINUS:
                 outdated = True
-                sx = (xe-xp) * shift
-                sy = (ye-yp) * shift
+                progressive_idx = -1
+                sx = (xe-xp) * shift * mult
+                sy = (ye-yp) * shift * mult
                 xp -= sx/2
                 xe += sx/2
                 yp -= sy/2
                 ye += sy/2
-            elif event.key == pygame.K_UP:
-                outdated = True
-                sx = (xe-xp) * shift
-                xp -= sx/2
-                xe -= sx/2
-            elif event.key == pygame.K_DOWN:
-                outdated = True
-                sx = (xe-xp) * shift
-                xp += sx/2
-                xe += sx/2
             elif event.key == pygame.K_LEFT:
                 outdated = True
-                sy = (ye-yp) * shift
-                yp -= sy/2
-                ye -= sy/2
+                progressive_idx = -1
+                sx = (xe-xp) * shift * mult
+                xp -= sx/2
+                xe -= sx/2
             elif event.key == pygame.K_RIGHT:
                 outdated = True
-                sy = (ye-yp) * shift
+                progressive_idx = -1
+                sx = (xe-xp) * shift * mult
+                xp += sx/2
+                xe += sx/2
+            elif event.key == pygame.K_UP:
+                outdated = True
+                progressive_idx = -1
+                sy = (ye-yp) * shift * mult
+                yp -= sy/2
+                ye -= sy/2
+            elif event.key == pygame.K_DOWN:
+                outdated = True
+                progressive_idx = -1
+                sy = (ye-yp) * shift * mult
                 yp += sy/2
                 ye += sy/2
     for f in pages[current_page]:
         f.sync()
-    imask = (itercom == itercnt-1)
-    pallete_arr = np.array(collist,dtype = np.uint8)
-    map = itercom % (pallete_arr.shape[0]-1)
-    map[imask] = pallete_arr.shape[0]-1
-    img = pallete_arr[map]
-    sf = pygame.surfarray.make_surface(img.swapaxes(0,1))
     if saveImage:
         saveImage = False
-        pygame.image.save(sf,image_path)
+        if progressive and 0 <= progressive_idx < len(progressive_tiers) - 1:
+            1
+        else:
+            pygame.image.save(sf, image_path)
     if rendering:
-        window.blit(sf,(0,0))
+        window.blit(sf, (0, 0))
     pygame.draw.rect(window, (15, 15, 22), pygame.Rect(PANEL_X, 0, width - PANEL_X, height))
     pygame.draw.line(window, (70, 70, 90), (PANEL_X, 0), (PANEL_X, height), 2)
     if outdated:
@@ -504,6 +680,10 @@ while True:
         window.blit(lbl, lbl.get_rect(center=tr.center))
     for f in pages[current_page]:
         f.draw(window)
+    # Progressive refinement: one tier per frame
+    if progressive and 0 <= progressive_idx < len(progressive_tiers) - 1:
+        progressive_idx += 1
+        render_tier(progressive_idx)
     pygame.draw.rect(window, (60, 110, 70), apply_rect)
     pygame.draw.rect(window, (130, 200, 140), apply_rect, 2)
     window.blit(tab_font.render('Apply & re-render', True, white),
